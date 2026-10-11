@@ -49,6 +49,7 @@ import {
   refreshPaperclipWorkspaceEnvForExecution,
   isPaperclipSkillSourceMissing,
   readPaperclipRuntimeSkillEntries,
+  removeUndesiredPaperclipSkillLinks,
   readPaperclipIssueWorkModeFromContext,
   renderTemplate,
   hydrateFreshSessionHandoff,
@@ -518,6 +519,12 @@ export async function ensureCodexSkillsInjected(
   const desiredSkillNames =
     options.desiredSkillNames ?? allSkillsEntries.map((entry) => entry.key);
   const desiredSet = new Set(desiredSkillNames);
+  const skillsHomeForPrune = options.skillsHome ?? resolveCodexSkillsDir(resolveSharedCodexHomeDir());
+  await removeUndesiredPaperclipSkillLinks({
+    skillsHome: skillsHomeForPrune,
+    entries: allSkillsEntries,
+    desiredSkillNames,
+  });
   const skillsEntries = allSkillsEntries.filter((entry) => desiredSet.has(entry.key));
   if (skillsEntries.length === 0) return;
 
