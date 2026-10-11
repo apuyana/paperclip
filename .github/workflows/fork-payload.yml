@@ -1,0 +1,77 @@
+name: Fork payload
+
+on:
+  push:
+    branches:
+      - fork/slim-operational-skill
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-payload-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  payload:
+    name: Build linux/amd64 payload
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
+      - name: Install native build packages
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@9.15.4 --activate
+
+      - name: Install dependencies
+        run: env -u NODE_ENV pnpm install --frozen-lockfile
+
+      - name: Build the CLI bundle
+        run: env -u NODE_ENV bash scripts/build-npm.sh --skip-checks --skip-typecheck
+
+      - name: Build the server and runner
+        run: env -u NODE_ENV pnpm -r --filter @paperclipai/server... --if-present run build
+
+      - name: Pack the managed payload
+        run: env -u NODE_ENV bash scripts/pack-managed-payload.sh "$RUNNER_TEMP/payload"
+
+      - name: Publish the payload release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha12="${GITHUB_SHA:0:12}"
+          tag="payload-${sha12}"
+          asset_dir="$RUNNER_TEMP/payload"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release delete "$tag" --yes --cleanup-tag
+          fi
+          gh release create "$tag" \
+            --title "Payload ${sha12}" \
+            --notes "$(cat <<EOF
+          Managed install payload for \`apuyana/paperclip@${GITHUB_SHA}\`.
+
+          Built with Node.js 24 on linux/amd64. Extract
+          \`paperclip-payload-${sha12}.tar.gz\` into
+          \`~/.paperclip/cli/installs/git/${sha12}/\` and point
+          \`~/.paperclip/cli/current\` at that directory. The slow server
+          does not compile this build.
+          EOF
+          )" \
+            "$asset_dir/paperclip-payload-${sha12}.tar.gz" \
+            "$asset_dir/paperclip-payload-${sha12}.json"
