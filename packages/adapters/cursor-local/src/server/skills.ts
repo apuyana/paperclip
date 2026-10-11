@@ -9,6 +9,7 @@ import type {
 import {
   buildPersistentSkillSnapshot,
   ensurePaperclipSkillSymlink,
+  omitBundledOperationalSkillWhenReplaced,
   readPaperclipRuntimeSkillEntries,
   readInstalledSkillTargets,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -57,10 +58,12 @@ export async function syncCursorSkills(
   desiredSkills: string[],
 ): Promise<AdapterSkillSnapshot> {
   const availableEntries = await readPaperclipRuntimeSkillEntries(ctx.config, __moduleDir);
-  const desiredSet = new Set([
-    ...resolveLegacyPaperclipDesiredSkillNames({}, availableEntries),
-    ...desiredSkills,
-  ]);
+  const desiredSet = new Set(
+    omitBundledOperationalSkillWhenReplaced([
+      ...resolveLegacyPaperclipDesiredSkillNames({}, availableEntries),
+      ...desiredSkills,
+    ]),
+  );
   const skillsHome = resolveCursorSkillsHome(ctx.config);
   await fs.mkdir(skillsHome, { recursive: true });
   const installed = await readInstalledSkillTargets(skillsHome);
