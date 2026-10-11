@@ -39,6 +39,7 @@ import {
   ensurePathInEnv,
   refreshPaperclipWorkspaceEnvForExecution,
   isPaperclipSkillSourceMissing,
+  readInstalledSkillTargets,
   readPaperclipRuntimeSkillEntries,
   readPaperclipIssueWorkModeFromContext,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -229,6 +230,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const cursorSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredCursorSkillNames = resolveLegacyPaperclipDesiredSkillNames(config, cursorSkillEntries);
   if (!executionTargetIsRemote) {
+    const skillsHome = resolveCursorSkillsHome(config);
+    const installed = await readInstalledSkillTargets(skillsHome);
+    for (const entry of cursorSkillEntries) {
+      if (desiredCursorSkillNames.includes(entry.key)) continue;
+      const installedEntry = installed.get(entry.runtimeName);
+      if (!installedEntry || installedEntry.targetPath !== entry.source) continue;
+      await fs.unlink(path.join(skillsHome, entry.runtimeName)).catch(() => {});
+    }
     await ensureCursorSkillsInjected(onLog, {
       skillsEntries: cursorSkillEntries.filter(
         (entry) => desiredCursorSkillNames.includes(entry.key) && !isPaperclipSkillSourceMissing(entry),
