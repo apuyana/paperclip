@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CONNECTION_INTENT_AGENT_GUIDANCE } from "@paperclipai/shared";
 import {
   readPaperclipRuntimeSkillEntries,
@@ -21,6 +21,7 @@ import {
   isPaperclipExternalChatTurn,
   materializePaperclipSkillCopy,
   PAPERCLIP_OPERATIONAL_SKILL_KEY,
+  PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV,
   refreshPaperclipWorkspaceEnvForExecution,
   renderPaperclipWakePrompt,
   resolveLegacyPaperclipDesiredSkillNames,
@@ -104,6 +105,23 @@ describe("legacy adapter skill selection", () => {
     key: "company/example/reviewer",
     runtimeName: "reviewer",
   };
+  const slimEntry = {
+    key: "company/example/paperclip-slim",
+    runtimeName: "paperclip-slim",
+  };
+  const previousOverride = process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV];
+
+  beforeEach(() => {
+    delete process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV];
+  });
+
+  afterEach(() => {
+    if (previousOverride === undefined) {
+      delete process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV];
+    } else {
+      process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV] = previousOverride;
+    }
+  });
 
   it("keeps the operational skill selected without a stored preference", () => {
     expect(
@@ -142,6 +160,44 @@ describe("legacy adapter skill selection", () => {
     expect(resolvePaperclipDesiredSkillNames({}, [operationalEntry])).toEqual(
       [],
     );
+  });
+
+  it("mounts the env-selected skill and drops the bundled operational skill", () => {
+    process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV] = slimEntry.key;
+    expect(
+      resolveLegacyPaperclipDesiredSkillNames(
+        {
+          paperclipSkillSync: {
+            desiredSkills: [PAPERCLIP_OPERATIONAL_SKILL_KEY, optionalEntry.key],
+          },
+        },
+        [operationalEntry, optionalEntry, slimEntry],
+      ),
+    ).toEqual([slimEntry.key, optionalEntry.key]);
+  });
+
+  it("does not fall back to the bundled skill when the selected key is missing", () => {
+    process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV] = "company/example/missing";
+    expect(
+      resolveLegacyPaperclipDesiredSkillNames(
+        {
+          paperclipSkillSync: {
+            desiredSkills: [PAPERCLIP_OPERATIONAL_SKILL_KEY, optionalEntry.key],
+          },
+        },
+        [operationalEntry, optionalEntry],
+      ),
+    ).toEqual([optionalEntry.key]);
+  });
+
+  it("treats a blank operational skill override as unset", () => {
+    process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV] = "   ";
+    expect(
+      resolveLegacyPaperclipDesiredSkillNames({}, [
+        operationalEntry,
+        optionalEntry,
+      ]),
+    ).toEqual([PAPERCLIP_OPERATIONAL_SKILL_KEY]);
   });
 });
 
