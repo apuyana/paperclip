@@ -38,6 +38,7 @@ import {
   buildPaperclipEnv,
   isPaperclipSkillSourceMissing,
   readPaperclipRuntimeSkillEntries,
+  removeUndesiredPaperclipSkillLinks,
   readPaperclipIssueWorkModeFromContext,
   joinPromptSections,
   buildInvocationEnvForLogs,
@@ -94,7 +95,7 @@ import {
   minimumClaudeCliVersionForModel,
 } from "./cli-capabilities.js";
 import { prepareCompatibleClaudeCommand } from "./sandbox-cli-version.js";
-import { resolveClaudeDesiredSkillNames } from "./skills.js";
+import { resolveClaudeDesiredSkillNames, resolveClaudeSkillsHome } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
 import { prepareClaudePromptBundle } from "./prompt-cache.js";
 import { buildClaudeExecutionPermissionArgs, claudeSandboxPermissionEnv } from "./permissions.js";
@@ -509,6 +510,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const billingType = resolveClaudeBillingType(effectiveEnv);
   const claudeSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkillNames = new Set(resolveClaudeDesiredSkillNames(config, claudeSkillEntries));
+  await removeUndesiredPaperclipSkillLinks({
+    skillsHome: resolveClaudeSkillsHome(config),
+    entries: claudeSkillEntries,
+    desiredSkillNames: [...desiredSkillNames],
+  });
   // Keep per-run working-copy paths out of the content-addressed system prompt.
   // Resumed sessions retain that prompt, so refresh the location on every turn.
   let combinedInstructionsContents: string | null = null;
