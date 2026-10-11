@@ -87,13 +87,11 @@ done
 mapfile -t TARBALLS < <(find "$STAGING" -maxdepth 1 -name '*.tgz' -printf '%f\n' | sort)
 CLI_TARBALL="paperclipai-${VERSION}.tgz"
 WORKSPACE_COUNT=0
-INSTALL_ARGS=()
 for ENTRY in "${TARBALLS[@]}"; do
   if [[ "$ENTRY" == "$CLI_TARBALL" ]]; then
     continue
   fi
   WORKSPACE_COUNT=$((WORKSPACE_COUNT + 1))
-  INSTALL_ARGS+=("$STAGING/$ENTRY")
 done
 if [[ ! -f "$STAGING/$CLI_TARBALL" || "$WORKSPACE_COUNT" -ne "${#PACKAGE_DIRS[@]}" ]]; then
   echo "Packaging produced ${WORKSPACE_COUNT} workspace tarballs; expected ${#PACKAGE_DIRS[@]}." >&2
@@ -101,7 +99,26 @@ if [[ ! -f "$STAGING/$CLI_TARBALL" || "$WORKSPACE_COUNT" -ne "${#PACKAGE_DIRS[@]
   exit 1
 fi
 
-npm install --prefix "$PAYLOAD" "$STAGING/$CLI_TARBALL" "${INSTALL_ARGS[@]}" --no-audit --no-fund
+# Workspace specs are rewritten to the parent package version (server 0.3.1
+# asks for @paperclipai/plugin-sdk@0.3.1, but the packed sdk is 1.0.0). That
+# version is not on the registry. Install every packed tarball and override
+# the whole tree to those files.
+mkdir -p "$PAYLOAD"
+node --input-type=module -e '
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const staging = process.argv[1];
+const payload = process.argv[2];
+const specs = {};
+for (const name of fs.readdirSync(staging).filter((entry) => entry.endsWith(".tgz"))) {
+  const manifest = JSON.parse(execFileSync("tar", ["-xOf", path.join(staging, name), "package/package.json"], { encoding: "utf8" }));
+  specs[manifest.name] = pathToFileURL(path.join(staging, name)).href;
+}
+fs.writeFileSync(path.join(payload, "package.json"), JSON.stringify({ private: true, dependencies: specs, overrides: specs }, null, 2) + "\n");
+' "$STAGING" "$PAYLOAD"
+npm install --prefix "$PAYLOAD" --no-audit --no-fund
 
 ENTRYPOINT="$PAYLOAD/node_modules/paperclipai/dist/index.js"
 if [[ ! -f "$ENTRYPOINT" ]]; then
