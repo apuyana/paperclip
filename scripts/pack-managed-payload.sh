@@ -17,6 +17,14 @@ if [[ ! -f cli/dist/index.js ]]; then
   exit 1
 fi
 
+# @paperclipai/server lists ui-dist and skills in `files`. The release flow
+# creates both before packaging; a fresh checkout has neither.
+bash "$REPO_ROOT/scripts/prepare-server-ui-dist.sh"
+for pkg_dir in server packages/adapters/claude-local packages/adapters/codex-local; do
+  rm -rf "$REPO_ROOT/$pkg_dir/skills"
+  cp -r "$REPO_ROOT/skills" "$REPO_ROOT/$pkg_dir/skills"
+done
+
 SHA="$(git rev-parse HEAD)"
 SHA12="${SHA:0:12}"
 VERSION="$(node -e "process.stdout.write(JSON.parse(require('node:fs').readFileSync('cli/package.json','utf8')).version)")"
