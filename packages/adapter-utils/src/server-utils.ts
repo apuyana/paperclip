@@ -4240,6 +4240,35 @@ export const PAPERCLIP_FEEDBACK_SKILL_KEYS = [
   "paperclipai/paperclip/suggestion-box",
 ] as const;
 
+export const PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV =
+  "PAPERCLIP_OPERATIONAL_SKILL_KEY";
+
+function normalizeSkillKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+/**
+ * When set, legacy adapters mount this company skill instead of
+ * `PAPERCLIP_OPERATIONAL_SKILL_KEY`. The value is the skill's canonical key.
+ * A blank value is ignored. The skill body is not inspected.
+ */
+export function readPaperclipOperationalSkillKeyOverride(): string | null {
+  const raw = process.env[PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function omitBundledOperationalSkillWhenReplaced(
+  keys: readonly string[],
+): string[] {
+  const override = readPaperclipOperationalSkillKeyOverride();
+  if (!override) return [...keys];
+  const bundledKey = normalizeSkillKey(PAPERCLIP_OPERATIONAL_SKILL_KEY);
+  if (normalizeSkillKey(override) === bundledKey) return [...keys];
+  return keys.filter((key) => normalizeSkillKey(key) !== bundledKey);
+}
+
 /**
  * Native Paperclip Runner sessions receive the control-plane contract through
  * PRP, so carrying the legacy operational skill into their stored preference
@@ -4293,21 +4322,31 @@ export function resolveLegacyPaperclipDesiredSkillNames(
   config: Record<string, unknown>,
   availableEntries: Array<{ key: string; runtimeName?: string | null }>,
 ): string[] {
-  const desiredSkills = resolvePaperclipDesiredSkillNames(
-    config,
-    availableEntries,
+  const desiredSkills = omitBundledOperationalSkillWhenReplaced(
+    resolvePaperclipDesiredSkillNames(config, availableEntries),
+  );
+  const override = readPaperclipOperationalSkillKeyOverride();
+  const operationalKey = normalizeSkillKey(
+    override ?? PAPERCLIP_OPERATIONAL_SKILL_KEY,
   );
   const operationalEntry = availableEntries.find(
-    (entry) =>
-      entry.key.trim().toLowerCase() === PAPERCLIP_OPERATIONAL_SKILL_KEY,
+    (entry) => normalizeSkillKey(entry.key) === operationalKey,
   );
   if (!operationalEntry) return desiredSkills;
 
   const feedbackEntries = PAPERCLIP_FEEDBACK_SKILL_KEYS.flatMap((key) => {
-    const entry = availableEntries.find((candidate) => candidate.key.trim().toLowerCase() === key);
+    const entry = availableEntries.find((candidate) => normalizeSkillKey(candidate.key) === key);
     return entry ? [entry.key] : [];
   });
-  return Array.from(new Set([operationalEntry.key, ...feedbackEntries, ...desiredSkills]));
+  return Array.from(
+    new Set([
+      operationalEntry.key,
+      ...feedbackEntries,
+      ...desiredSkills.filter(
+        (key) => normalizeSkillKey(key) !== operationalKey,
+      ),
+    ]),
+  );
 }
 
 export function writePaperclipSkillSyncPreference(
