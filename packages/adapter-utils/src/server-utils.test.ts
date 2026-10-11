@@ -24,6 +24,7 @@ import {
   PAPERCLIP_OPERATIONAL_SKILL_KEY_ENV,
   refreshPaperclipWorkspaceEnvForExecution,
   renderPaperclipWakePrompt,
+  removeUndesiredPaperclipSkillLinks,
   resolveLegacyPaperclipDesiredSkillNames,
   resolvePaperclipDesiredSkillNames,
   selectPaperclipTaskMarkdown,
@@ -187,6 +188,34 @@ describe("legacy adapter skill selection", () => {
         [operationalEntry, optionalEntry],
       ),
     ).toEqual([optionalEntry.key]);
+  });
+
+  it("removes a Paperclip skill link that is no longer selected", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-skill-links-"));
+    const source = path.join(root, "source");
+    const otherSource = path.join(root, "other-source");
+    const skillsHome = path.join(root, "skills");
+    await fs.mkdir(path.join(source, "paperclip"), { recursive: true });
+    await fs.mkdir(otherSource, { recursive: true });
+    await fs.mkdir(skillsHome, { recursive: true });
+    await fs.symlink(path.join(source, "paperclip"), path.join(skillsHome, "paperclip"));
+    await fs.symlink(otherSource, path.join(skillsHome, "kept"));
+
+    try {
+      await removeUndesiredPaperclipSkillLinks({
+        skillsHome,
+        entries: [{
+          key: PAPERCLIP_OPERATIONAL_SKILL_KEY,
+          runtimeName: "paperclip",
+          source: path.join(source, "paperclip"),
+        }],
+        desiredSkillNames: [],
+      });
+      await expect(fs.lstat(path.join(skillsHome, "paperclip"))).rejects.toThrow();
+      expect((await fs.lstat(path.join(skillsHome, "kept"))).isSymbolicLink()).toBe(true);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("treats a blank operational skill override as unset", () => {

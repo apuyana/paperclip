@@ -35,6 +35,7 @@ import {
   buildPaperclipEnv,
   isPaperclipSkillSourceMissing,
   readPaperclipRuntimeSkillEntries,
+  removeUndesiredPaperclipSkillLinks,
   readPaperclipIssueWorkModeFromContext,
   joinPromptSections,
   buildInvocationEnvForLogs,
@@ -88,7 +89,7 @@ import {
   minimumClaudeCliVersionForModel,
   readClaudeCommandVersion,
 } from "./cli-capabilities.js";
-import { resolveClaudeDesiredSkillNames } from "./skills.js";
+import { resolveClaudeDesiredSkillNames, resolveClaudeSkillsHome } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
 import { prepareClaudePromptBundle } from "./prompt-cache.js";
 import { buildClaudeExecutionPermissionArgs, claudeSandboxPermissionEnv } from "./permissions.js";
@@ -493,6 +494,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const billingType = resolveClaudeBillingType(effectiveEnv);
   const claudeSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkillNames = new Set(resolveClaudeDesiredSkillNames(config, claudeSkillEntries));
+  await removeUndesiredPaperclipSkillLinks({
+    skillsHome: resolveClaudeSkillsHome(config),
+    entries: claudeSkillEntries,
+    desiredSkillNames: [...desiredSkillNames],
+  });
   // When instructionsFilePath is configured, build a stable content-addressed
   // file that includes both the file content and the path directive, so we only
   // need --append-system-prompt-file (Claude CLI forbids using both flags together).

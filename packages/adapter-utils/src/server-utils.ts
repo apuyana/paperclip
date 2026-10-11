@@ -4259,6 +4259,23 @@ export function omitBundledOperationalSkillWhenReplaced(
   return keys.filter((key) => normalizeSkillKey(key) !== bundledKey);
 }
 
+/** Drop Paperclip-owned skill links that are no longer selected. Leaves links that point somewhere else. */
+export async function removeUndesiredPaperclipSkillLinks(input: {
+  skillsHome: string;
+  entries: ReadonlyArray<{ key: string; runtimeName: string; source: string }>;
+  desiredSkillNames: readonly string[];
+}): Promise<void> {
+  const desired = new Set(input.desiredSkillNames);
+  const installed = await readInstalledSkillTargets(input.skillsHome);
+  for (const entry of input.entries) {
+    if (desired.has(entry.key)) continue;
+    const installedTarget = installed.get(entry.runtimeName)?.targetPath;
+    if (!installedTarget) continue;
+    if (path.resolve(installedTarget) !== path.resolve(entry.source)) continue;
+    await fs.unlink(path.join(input.skillsHome, entry.runtimeName)).catch(() => {});
+  }
+}
+
 /**
  * Native Paperclip Runner sessions receive the control-plane contract through
  * PRP, so carrying the legacy operational skill into their stored preference
