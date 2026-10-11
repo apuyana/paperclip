@@ -25,7 +25,7 @@ PAYLOAD="$STAGING/payload"
 cleanup() { rm -rf "$STAGING"; }
 trap cleanup EXIT
 
-mapfile -t PACKAGE_DIRS < <(node --input-type=module -e '
+PACKAGE_LIST="$(node --input-type=module -e '
 import fs from "node:fs";
 import path from "node:path";
 const checkoutPath = process.argv[1];
@@ -54,7 +54,8 @@ const visit = (packageName) => {
 };
 visit("@paperclipai/server");
 process.stdout.write(ordered.join("\n") + "\n");
-' "$REPO_ROOT")
+' "$REPO_ROOT")"
+mapfile -t PACKAGE_DIRS <<< "$PACKAGE_LIST"
 
 INDEX=0
 for DIR in "${PACKAGE_DIRS[@]}"; do
