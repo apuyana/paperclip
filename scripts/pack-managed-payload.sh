@@ -75,7 +75,7 @@ for DIR in "${PACKAGE_DIRS[@]}"; do
   if [[ "$BUNDLED" != "0" ]]; then
     STAGED_PACKAGE="$STAGING/workspace-package-$INDEX"
     node "$REPO_ROOT/scripts/prepare-bundled-package.mjs" "$REPO_ROOT/$DIR" "$STAGED_PACKAGE"
-    npm pack "$STAGED_PACKAGE" --pack-destination "$STAGING"
+    npm pack "$STAGED_PACKAGE" --pack-destination "$STAGING" --ignore-scripts
   else
     PAPERCLIP_RELEASE_REUSE_UI_DIST=1 corepack pnpm --dir "$DIR" pack --pack-destination "$STAGING"
   fi
