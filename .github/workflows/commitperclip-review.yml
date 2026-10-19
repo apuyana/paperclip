@@ -29,43 +29,7 @@ jobs:
           base-ref: ${{ github.event.pull_request.base.sha }}
           head-ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Set up Node
-        if: ${{ secrets.COMMITPERCLIP_KEY != '' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-
-      - name: Generate commitperclip token
-        id: token
-        if: ${{ secrets.COMMITPERCLIP_KEY != '' }}
-        run: |
-          TOKEN=$(node .github/scripts/get-bot-token.mjs)
-          echo "::add-mask::$TOKEN"
-          echo "value=$TOKEN" >> $GITHUB_OUTPUT
-        env:
-          COMMITPERCLIP_KEY: ${{ secrets.COMMITPERCLIP_KEY }}
-
-      - name: Run quality gates
-        id: quality
-        if: ${{ secrets.COMMITPERCLIP_KEY != '' && github.event.pull_request.user.login != 'dependabot[bot]' }}
-        run: node .github/scripts/run-quality-gates.mjs
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.value }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
-
-      - name: Fail if quality gates failed
-        if: >-
-          ${{ secrets.COMMITPERCLIP_KEY != '' &&
-          github.event.pull_request.user.login != 'dependabot[bot]' &&
-          steps.quality.outcome == 'failure' }}
-        run: |
-          echo "One or more quality gates failed. See commitperclip comment on the PR for details."
-          exit 1
-
-      - name: Skip commitperclip bot (secret not configured)
-        if: ${{ secrets.COMMITPERCLIP_KEY == '' }}
-        run: echo '::notice title=commitperclip::COMMITPERCLIP_KEY not set on this fork; skipping bot quality gates.'
+      # Upstream commitperclip bot needs COMMITPERCLIP_KEY. This fork does not
+      # store that secret (board owns new credentials). Skip bot gates here.
+      - name: Skip commitperclip bot on this fork
+        run: echo '::notice title=commitperclip::Bot quality gates skipped (COMMITPERCLIP_KEY not configured on fork).'
