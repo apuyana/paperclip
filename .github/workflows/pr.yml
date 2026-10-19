@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   ci:
-    # Master requires CODEOWNERS review for .github/**, including this workflow.
-    # The AWS runner group permits pr-trusted.yml@refs/heads/master.
-    uses: paperclipai/paperclip/.github/workflows/pr-trusted.yml@master
+    # Fork note: calling paperclipai/...@master drifts ahead of this tree and
+    # fails jobs that expect scripts not present at v2026.1012.0 (build:runtime,
+    # server-boot-smoke, docker-compose-secrets tests). Use the in-repo workflow
+    # that matches the checkout. Gate still fail-closes to ubuntu-latest here.
+    uses: ./.github/workflows/pr-trusted.yml
