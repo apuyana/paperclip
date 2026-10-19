@@ -744,6 +744,54 @@ describe("ssh env-lab fixture", () => {
     expect(await readFile(path.join(started.workspaceDir, "node_modules", "personal.bin"))).toEqual(binary);
   }, SSH_FIXTURE_TEST_TIMEOUT_MS);
 
+  it("copies a Git workspace without its ignored paths and restores only what changed", async () => {
+    const rootDir = await createFixtureRootDir();
+    const localRepo = path.join(rootDir, "ignored-local");
+    await mkdir(path.join(localRepo, "node_modules", "dep"), { recursive: true });
+    await git(localRepo, ["init"]);
+    await git(localRepo, ["checkout", "-b", "main"]);
+    await git(localRepo, ["config", "user.name", "Paperclip Test"]);
+    await git(localRepo, ["config", "user.email", "test@paperclip.dev"]);
+    await writeFile(path.join(localRepo, ".gitignore"), "node_modules/\n.env\n");
+    await writeFile(path.join(localRepo, "tracked.txt"), "base\n");
+    await git(localRepo, ["add", ".gitignore", "tracked.txt"]);
+    await git(localRepo, ["commit", "-m", "initial"]);
+    await writeFile(path.join(localRepo, "untracked.txt"), "new file\n");
+    await writeFile(path.join(localRepo, ".env"), "SECRET=1\n");
+    await writeFile(path.join(localRepo, "node_modules", "dep", "index.js"), "module.exports = 1;\n");
+    const started = await startSshEnvLabFixtureOrSkip(path.join(rootDir, "state.json"), "SSH ignored paths");
+    if (!started) return;
+    const config = await buildSshEnvLabFixtureConfig(started);
+    const spec = { ...config, remoteCwd: started.workspaceDir } as const;
+
+    const prepared = await prepareRemoteManagedRuntime({
+      spec, runId: "run-ignored", adapterKey: "test-adapter", workspaceLocalDir: localRepo,
+    });
+
+    const remote = await runSshCommand(
+      config,
+      `cd ${JSON.stringify(prepared.workspaceRemoteDir)} && ls -A | sort`,
+      { timeoutMs: 30_000, maxBuffer: 256 * 1024 },
+    );
+    const remoteEntries = remote.stdout.split("\n").map((entry) => entry.trim());
+    expect(remoteEntries).toEqual(expect.arrayContaining(["tracked.txt", "untracked.txt", ".gitignore"]));
+    expect(remoteEntries).not.toContain("node_modules");
+    expect(remoteEntries).not.toContain(".env");
+
+    // The agent installs its own dependencies on the host and changes a tracked file.
+    await runSshCommand(
+      config,
+      `cd ${JSON.stringify(prepared.workspaceRemoteDir)} && mkdir -p node_modules/remote-only && echo x > node_modules/remote-only/i.js && echo changed > tracked.txt`,
+      { timeoutMs: 30_000, maxBuffer: 256 * 1024 },
+    );
+    await prepared.restoreWorkspace();
+
+    expect(await readFile(path.join(localRepo, "tracked.txt"), "utf8")).toBe("changed\n");
+    expect(await readFile(path.join(localRepo, "node_modules", "dep", "index.js"), "utf8")).toBe("module.exports = 1;\n");
+    expect(await readFile(path.join(localRepo, ".env"), "utf8")).toBe("SECRET=1\n");
+    await expect(stat(path.join(localRepo, "node_modules", "remote-only"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, SSH_FIXTURE_TEST_TIMEOUT_MS);
+
   it("round-trips a git workspace through the SSH fixture", async () => {
     const rootDir = await createFixtureRootDir();
     const statePath = path.join(rootDir, "state.json");

@@ -1,7 +1,11 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const execFileAsync = promisify(execFile);
 
 const {
   prepareWorkspaceForSshExecution,
@@ -348,5 +352,86 @@ describe("remote managed runtime", () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe("default workspace copy", () => {
+    type PrepareInput = { localDir: string; resolveTransferExclude?: (dir: string) => Promise<string[]> };
+    const sshSpec = {
+      host: "127.0.0.1", port: 2222, username: "fixture", remoteWorkspacePath: "/app", remoteCwd: "/app",
+      privateKey: "PRIVATE KEY", knownHosts: "KNOWN HOSTS", strictHostKeyChecking: true,
+    };
+
+    // The mocked SSH layer reports what the real one does: it resolves the transfer
+    // exclude for the directory it copies and hands the list back to the caller.
+    function resolveLikeSsh(gitBacked: boolean) {
+      (prepareWorkspaceForSshExecution as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        async (input: PrepareInput) => ({
+          gitBacked,
+          exclude: input.resolveTransferExclude ? await input.resolveTransferExclude(input.localDir) : [],
+        }),
+      );
+    }
+
+    it("leaves out the paths a Git workspace ignores, from both the copy and the restore baseline", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-ssh-git-ignored-"));
+      cleanupDirs.push(root);
+      await execFileAsync("git", ["init", "--quiet"], { cwd: root });
+      await mkdir(path.join(root, "node_modules"));
+      await mkdir(path.join(root, "build"));
+      await writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+      await writeFile(path.join(root, "node_modules", "dep.js"), "module.exports = 1;\n");
+      await writeFile(path.join(root, "build", "tracked-output.js"), "// not ignored\n");
+      await writeFile(path.join(root, "src.txt"), "source\n");
+      resolveLikeSsh(true);
+
+      const prepared = await prepareRemoteManagedRuntime({
+        spec: sshSpec, runId: "git-ignored", adapterKey: "test", workspaceLocalDir: root,
+      });
+      await prepared.restoreWorkspace();
+
+      const args = vi.mocked(restoreWorkspaceFromSshExecution).mock.calls[0] as unknown as [
+        { baselineSnapshot: { exclude: string[]; entries: Map<string, unknown> } },
+      ];
+      const { exclude, entries } = args[0].baselineSnapshot;
+      expect(exclude).toContain("node_modules");
+      // Only what Git ignores is left behind; other directories still travel.
+      expect(exclude).not.toContain("build");
+      expect(entries.has("node_modules/dep.js")).toBe(false);
+      expect(entries.has("build/tracked-output.js")).toBe(true);
+      expect(entries.has("src.txt")).toBe(true);
+    });
+
+    it("leaves out dependency and build directories when the workspace is not a Git work tree", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-ssh-plain-heavy-"));
+      cleanupDirs.push(root);
+      await mkdir(path.join(root, "repo", "node_modules"), { recursive: true });
+      await writeFile(path.join(root, "repo", "node_modules", "dep.js"), "module.exports = 1;\n");
+      await writeFile(path.join(root, "repo", "index.js"), "// source\n");
+      resolveLikeSsh(false);
+
+      const prepared = await prepareRemoteManagedRuntime({
+        spec: sshSpec, runId: "plain-heavy", adapterKey: "test", workspaceLocalDir: root,
+      });
+      await prepared.restoreWorkspace();
+
+      const args = vi.mocked(restoreWorkspaceFromSshExecution).mock.calls[0] as unknown as [
+        { baselineSnapshot: { exclude: string[]; entries: Map<string, unknown> } },
+      ];
+      const { exclude, entries } = args[0].baselineSnapshot;
+      expect(exclude).toEqual(expect.arrayContaining(["node_modules", "*/node_modules", "dist"]));
+      expect(entries.has("repo/node_modules/dep.js")).toBe(false);
+      expect(entries.has("repo/index.js")).toBe(true);
+    });
+
+    it("does not resolve a transfer exclude when the whole workspace is requested", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "paperclip-ssh-all-files-"));
+      cleanupDirs.push(root);
+      await prepareRemoteManagedRuntime({
+        spec: sshSpec, runId: "all-files", adapterKey: "test", workspaceLocalDir: root, workspaceFileMode: "all",
+      });
+      expect(prepareWorkspaceForSshExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceFileMode: "all", resolveTransferExclude: undefined }),
+      );
+    });
   });
 });
