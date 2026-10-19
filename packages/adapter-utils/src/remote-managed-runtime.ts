@@ -10,6 +10,7 @@ import {
 import {
   mergeExcludes,
   referencedSourceIgnoreExcludeEntries,
+  resolveReferencedSourceIgnore,
   type SandboxAdditionalSource,
   type SandboxManagedRuntimeAssetRestoreContext,
 } from "./sandbox-managed-runtime.js";
@@ -81,6 +82,32 @@ async function readRemoteFile(spec: SshRemoteExecutionSpec, remotePath: string):
   return Buffer.from(result.stdout.replace(/\s+/g, ""), "base64");
 }
 
+// Dependency and build output directories dropped from a workspace copy when its
+// Git ignore rules cannot be read (the directory is not a Git work tree, or the
+// scan failed). Matches the sandbox lane's workspace excludes.
+const REMOTE_WORKSPACE_HEAVY_DIR_EXCLUDES = [
+  "node_modules",
+  "vendor",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".cache",
+].flatMap((entry) => [entry, `${entry}/*`, `*/${entry}`, `*/${entry}/*`]);
+
+// What a workspace copy leaves behind. A Git work tree skips exactly the paths
+// Git ignores, so tracked build output still travels. Anything else skips the
+// heavy directories above. Ignored paths are rebuilt on the execution host, and
+// copying them is what made large `node_modules` trees fail the transfer.
+async function resolveWorkspaceTransferExclude(localDir: string): Promise<string[]> {
+  const ignore = await resolveReferencedSourceIgnore(localDir);
+  return ignore.kind === "git"
+    ? referencedSourceIgnoreExcludeEntries(ignore)
+    : REMOTE_WORKSPACE_HEAVY_DIR_EXCLUDES;
+}
+
 export function buildRemoteExecutionSessionIdentity(spec: SshRemoteExecutionSpec | null) {
   if (!spec) return null;
   return {
@@ -143,6 +170,7 @@ export async function prepareRemoteManagedRuntime(input: {
         onProgress: input.onProgress,
         workspaceFileMode: input.workspaceFileMode,
         workspaceExclude: input.workspaceExclude,
+        resolveTransferExclude: input.workspaceFileMode === "all" ? undefined : resolveWorkspaceTransferExclude,
       })
     : null;
   const projectRepositories = preparedWorkspace?.repositories ?? [];
@@ -153,8 +181,12 @@ export async function prepareRemoteManagedRuntime(input: {
               ...GIT_ARCHIVE_EXCLUDES,
               ".paperclip-runtime",
               ...(projectRepositories.length > 0 ? [PROJECT_REPOSITORIES_DIR] : []),
+              ...(preparedWorkspace.exclude ?? []),
             ]
-          : [".paperclip-runtime", ...(input.workspaceFileMode === "all" ? input.workspaceExclude ?? [] : [])],
+          : [
+              ".paperclip-runtime",
+              ...(input.workspaceFileMode === "all" ? input.workspaceExclude ?? [] : preparedWorkspace.exclude ?? []),
+            ],
       })
     : null;
   const repositoryBaselines: Array<{ path: string; baselineSnapshot: DirectorySnapshot }> = [];
@@ -162,7 +194,11 @@ export async function prepareRemoteManagedRuntime(input: {
     repositoryBaselines.push({
       path: repository,
       baselineSnapshot: await captureDirectorySnapshot(path.join(input.workspaceLocalDir, repository), {
-        exclude: [...GIT_ARCHIVE_EXCLUDES, ".paperclip-runtime"],
+        exclude: [
+          ...GIT_ARCHIVE_EXCLUDES,
+          ".paperclip-runtime",
+          ...(preparedWorkspace?.repositoryExcludes?.[repository] ?? []),
+        ],
       }),
     });
   }

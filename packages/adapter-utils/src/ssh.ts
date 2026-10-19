@@ -1646,9 +1646,21 @@ export async function prepareWorkspaceForSshExecution(input: {
   onProgress?: RuntimeProgressSink;
   workspaceFileMode?: "all";
   workspaceExclude?: string[];
-}): Promise<{ gitBacked: boolean; repositories?: string[] }> {
+  /**
+   * Extra tar excludes to apply to a directory before it is copied (for example
+   * the paths its Git checkout ignores). The result is returned so the caller
+   * can use the same list for the restore baseline.
+   */
+  resolveTransferExclude?: (localDir: string) => Promise<string[]>;
+}): Promise<{
+  gitBacked: boolean;
+  repositories?: string[];
+  exclude?: string[];
+  repositoryExcludes?: Record<string, string[]>;
+}> {
   const remoteDir = input.remoteDir ?? input.spec.remoteCwd;
   const gitSnapshot = input.workspaceFileMode === "all" ? null : await readLocalGitWorkspaceSnapshot(input.localDir);
+  const rootExclude = input.resolveTransferExclude ? await input.resolveTransferExclude(input.localDir) : [];
 
   if (gitSnapshot) {
     const repositories = await listLocalProjectRepositories(input.localDir);
@@ -1657,27 +1669,40 @@ export async function prepareWorkspaceForSshExecution(input: {
       localDir: input.localDir,
       remoteDir,
       snapshot: gitSnapshot,
-      exclude: repositories.length > 0 ? [PROJECT_REPOSITORIES_DIR] : [],
+      exclude: [...(repositories.length > 0 ? [PROJECT_REPOSITORIES_DIR] : []), ...rootExclude],
       onProgress: input.onProgress,
       progressLabel: "workspace",
     });
     if (repositories.length > 0) {
       await excludeProjectRepositoriesOnSsh(input.spec, remoteDir);
     }
+    const repositoryExcludes: Record<string, string[]> = {};
     for (const relative of repositories) {
       const localDir = path.join(input.localDir, relative);
       const snapshot = await readLocalGitWorkspaceSnapshot(localDir);
       if (!snapshot) throw new Error(`Cannot read the Git state of project repository: ${relative}`);
+      const repositoryExclude = input.resolveTransferExclude ? await input.resolveTransferExclude(localDir) : [];
+      repositoryExcludes[relative] = repositoryExclude;
       await transportGitWorkspaceToSsh({
         spec: input.spec,
         localDir,
         remoteDir: path.posix.join(remoteDir, relative),
         snapshot,
+        exclude: repositoryExclude,
         onProgress: input.onProgress,
         progressLabel: relative,
       });
     }
-    return { gitBacked: true, ...(repositories.length > 0 ? { repositories } : {}) };
+    return {
+      gitBacked: true,
+      ...(rootExclude.length > 0 ? { exclude: rootExclude } : {}),
+      ...(repositories.length > 0
+        ? {
+          repositories,
+          ...(Object.values(repositoryExcludes).some((entries) => entries.length > 0) ? { repositoryExcludes } : {}),
+        }
+        : {}),
+    };
   }
 
   await clearRemoteDirectory({
@@ -1689,11 +1714,11 @@ export async function prepareWorkspaceForSshExecution(input: {
     spec: input.spec,
     localDir: input.localDir,
     remoteDir,
-    exclude: [".paperclip-runtime", ...(input.workspaceFileMode === "all" ? input.workspaceExclude ?? [] : [])],
+    exclude: [".paperclip-runtime", ...(input.workspaceFileMode === "all" ? input.workspaceExclude ?? [] : rootExclude)],
     onProgress: input.onProgress,
     progressLabel: "workspace",
   });
-  return { gitBacked: false };
+  return { gitBacked: false, ...(rootExclude.length > 0 ? { exclude: rootExclude } : {}) };
 }
 
 export async function restoreWorkspaceFromSshExecution(input: {
