@@ -99,6 +99,21 @@ if [[ ! -f "$STAGING/$CLI_TARBALL" || "$WORKSPACE_COUNT" -ne "${#PACKAGE_DIRS[@]
   exit 1
 fi
 
+# npm ignores pnpm-lock.yaml, so a fresh resolve can give @paperclipai/shared
+# and @paperclipai/server different zod 4 copies. Schemas built with one copy
+# then break `z.toJSONSchema` from the other (ANU-726: project-tools MCP 500).
+# Force every zod 4 range to the version the pnpm lockfile gives the server.
+ZOD_VERSION="$(node -e '
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const pkg = path.join(process.argv[1], "server/node_modules/zod/package.json");
+  process.stdout.write(JSON.parse(fs.readFileSync(fs.realpathSync(pkg), "utf8")).version);
+' "$REPO_ROOT")"
+if [[ "$ZOD_VERSION" != 4.* ]]; then
+  echo "server resolves zod ${ZOD_VERSION:-<none>}; expected a zod 4 release." >&2
+  exit 1
+fi
+
 # Workspace specs are rewritten to the parent package version (server 0.3.1
 # asks for @paperclipai/plugin-sdk@0.3.1, but the packed sdk is 1.0.0). That
 # version is not on the registry. Install every packed tarball and override
@@ -116,9 +131,27 @@ for (const name of fs.readdirSync(staging).filter((entry) => entry.endsWith(".tg
   const manifest = JSON.parse(execFileSync("tar", ["-xOf", path.join(staging, name), "package/package.json"], { encoding: "utf8" }));
   specs[manifest.name] = pathToFileURL(path.join(staging, name)).href;
 }
-fs.writeFileSync(path.join(payload, "package.json"), JSON.stringify({ private: true, dependencies: specs, overrides: specs }, null, 2) + "\n");
-' "$STAGING" "$PAYLOAD"
+const overrides = { ...specs, "zod@^4": process.argv[3] };
+fs.writeFileSync(path.join(payload, "package.json"), JSON.stringify({ private: true, dependencies: specs, overrides }, null, 2) + "\n");
+' "$STAGING" "$PAYLOAD" "$ZOD_VERSION"
 npm install --prefix "$PAYLOAD" --no-audit --no-fund
+
+# Fail when the installed tree still holds more than one zod 4 copy.
+ZOD4_VERSIONS="$(find "$PAYLOAD/node_modules" -path '*/node_modules/zod/package.json' -print0 \
+  | xargs -0 node -e '
+    const fs = require("node:fs");
+    const versions = new Set();
+    for (const file of process.argv.slice(1)) {
+      const { version } = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (version.startsWith("4.")) versions.add(version);
+    }
+    process.stdout.write([...versions].sort().join(" "));
+  ')"
+if [[ "$ZOD4_VERSIONS" != "$ZOD_VERSION" ]]; then
+  echo "Payload has zod 4 versions [${ZOD4_VERSIONS}]; expected only ${ZOD_VERSION}." >&2
+  find "$PAYLOAD/node_modules" -path '*/node_modules/zod/package.json' >&2
+  exit 1
+fi
 
 ENTRYPOINT="$PAYLOAD/node_modules/paperclipai/dist/index.js"
 if [[ ! -f "$ENTRYPOINT" ]]; then
