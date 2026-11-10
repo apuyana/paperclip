@@ -65,6 +65,24 @@ process.stdout.write(ordered.join("\n") + "\n");
 ' "$REPO_ROOT")"
 mapfile -t PACKAGE_DIRS <<< "$PACKAGE_LIST"
 
+# npm ignores pnpm-lock.yaml, so a fresh resolve can give @paperclipai/shared
+# and @paperclipai/server different zod 4 copies. Schemas built with one copy
+# then break `z.toJSONSchema` from the other (ANU-726: project-tools MCP 500).
+# Force every zod to the version the pnpm lockfile gives the server. Every
+# zod consumer in the payload accepts it (ranges are ^4, or ^3.x || ^4).
+ZOD_VERSION="$(node -e '
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const pkg = path.join(process.argv[1], "server/node_modules/zod/package.json");
+  process.stdout.write(JSON.parse(fs.readFileSync(fs.realpathSync(pkg), "utf8")).version);
+' "$REPO_ROOT")"
+if [[ "$ZOD_VERSION" != 4.* ]]; then
+  echo "server resolves zod ${ZOD_VERSION:-<none>}; expected a zod 4 release." >&2
+  exit 1
+fi
+# prepare-bundled-package.mjs applies the same pin to bundled closures.
+export PAPERCLIP_BUNDLED_ZOD_VERSION="$ZOD_VERSION"
+
 INDEX=0
 for DIR in "${PACKAGE_DIRS[@]}"; do
   BUNDLED="$(node -e '
@@ -99,22 +117,6 @@ if [[ ! -f "$STAGING/$CLI_TARBALL" || "$WORKSPACE_COUNT" -ne "${#PACKAGE_DIRS[@]
   exit 1
 fi
 
-# npm ignores pnpm-lock.yaml, so a fresh resolve can give @paperclipai/shared
-# and @paperclipai/server different zod 4 copies. Schemas built with one copy
-# then break `z.toJSONSchema` from the other (ANU-726: project-tools MCP 500).
-# Force every zod to the version the pnpm lockfile gives the server. Every
-# zod consumer in the payload accepts it (ranges are ^4, or ^3.x || ^4).
-ZOD_VERSION="$(node -e '
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const pkg = path.join(process.argv[1], "server/node_modules/zod/package.json");
-  process.stdout.write(JSON.parse(fs.readFileSync(fs.realpathSync(pkg), "utf8")).version);
-' "$REPO_ROOT")"
-if [[ "$ZOD_VERSION" != 4.* ]]; then
-  echo "server resolves zod ${ZOD_VERSION:-<none>}; expected a zod 4 release." >&2
-  exit 1
-fi
-
 # Workspace specs are rewritten to the parent package version (server 0.3.1
 # asks for @paperclipai/plugin-sdk@0.3.1, but the packed sdk is 1.0.0). That
 # version is not on the registry. Install every packed tarball and override
@@ -145,12 +147,12 @@ ZOD4_VERSIONS="$(find "$PAYLOAD/node_modules" -path '*/node_modules/zod/package.
     for (const file of process.argv.slice(1)) {
       const { version } = JSON.parse(fs.readFileSync(file, "utf8"));
       if (version.startsWith("4.")) versions.add(version);
+      console.error(`zod ${version} ${file}`);
     }
     process.stdout.write([...versions].sort().join(" "));
   ')"
 if [[ "$ZOD4_VERSIONS" != "$ZOD_VERSION" ]]; then
   echo "Payload has zod 4 versions [${ZOD4_VERSIONS}]; expected only ${ZOD_VERSION}." >&2
-  find "$PAYLOAD/node_modules" -path '*/node_modules/zod/package.json' >&2
   exit 1
 fi
 

@@ -401,6 +401,11 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
   const { installManifest, profiles } = configureBundledProviderOverrides(
     createBundledInstallManifest(publishManifest, bundledDependencies), bundledDependencies, rootPackage, profileData,
   );
+  // The managed payload pins one zod for the whole tree (see
+  // scripts/pack-managed-payload.sh). Bundled closures install separately, so
+  // the pin must reach them here too.
+  const pinnedZodVersion = process.env.PAPERCLIP_BUNDLED_ZOD_VERSION;
+  if (pinnedZodVersion) installManifest.overrides = { ...installManifest.overrides, zod: pinnedZodVersion };
   writeFileSync(deployedPackagePath, `${JSON.stringify(installManifest, null, 2)}\n`);
 
   execFileSync(
