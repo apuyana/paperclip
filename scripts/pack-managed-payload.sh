@@ -102,7 +102,8 @@ fi
 # npm ignores pnpm-lock.yaml, so a fresh resolve can give @paperclipai/shared
 # and @paperclipai/server different zod 4 copies. Schemas built with one copy
 # then break `z.toJSONSchema` from the other (ANU-726: project-tools MCP 500).
-# Force every zod 4 range to the version the pnpm lockfile gives the server.
+# Force every zod to the version the pnpm lockfile gives the server. Every
+# zod consumer in the payload accepts it (ranges are ^4, or ^3.x || ^4).
 ZOD_VERSION="$(node -e '
   const fs = require("node:fs");
   const path = require("node:path");
@@ -131,7 +132,7 @@ for (const name of fs.readdirSync(staging).filter((entry) => entry.endsWith(".tg
   const manifest = JSON.parse(execFileSync("tar", ["-xOf", path.join(staging, name), "package/package.json"], { encoding: "utf8" }));
   specs[manifest.name] = pathToFileURL(path.join(staging, name)).href;
 }
-const overrides = { ...specs, "zod@^4": process.argv[3] };
+const overrides = { ...specs, zod: process.argv[3] };
 fs.writeFileSync(path.join(payload, "package.json"), JSON.stringify({ private: true, dependencies: specs, overrides }, null, 2) + "\n");
 ' "$STAGING" "$PAYLOAD" "$ZOD_VERSION"
 npm install --prefix "$PAYLOAD" --no-audit --no-fund
