@@ -50,6 +50,29 @@ jobs:
       - name: Pack the managed payload
         run: env -u NODE_ENV bash scripts/pack-managed-payload.sh "$RUNNER_TEMP/payload"
 
+      - name: Smoke-test the packed payload
+        run: |
+          set -euo pipefail
+          sha12="${GITHUB_SHA:0:12}"
+          smoke_dir="$RUNNER_TEMP/payload-smoke"
+          rm -rf "$smoke_dir" && mkdir -p "$smoke_dir"
+          tar -C "$smoke_dir" -xzf "$RUNNER_TEMP/payload/paperclip-payload-${sha12}.tar.gz"
+          # Schemas from @paperclipai/shared must convert with the server's
+          # zod (ANU-726: a split zod tree made every project-tools call 500).
+          node --input-type=module -e '
+            import path from "node:path";
+            import { pathToFileURL } from "node:url";
+            const file = path.join(process.argv[1], "node_modules/@paperclipai/server/dist/services/project-tools.js");
+            const { projectToolDefinitions } = await import(pathToFileURL(file).href);
+            const tools = projectToolDefinitions("standard", true);
+            const names = tools.map((tool) => tool.name);
+            console.log(`projectToolDefinitions built ${tools.length} tools: ${names.join(", ")}`);
+            const createProject = tools.find((tool) => tool.name === "create_project");
+            if (tools.length < 5 || !createProject?.inputSchema?.properties) {
+              throw new Error("project-tools smoke failed: expected 5 tools with a create_project JSON schema.");
+            }
+          ' "$smoke_dir"
+
       - name: Publish the payload release
         env:
           GH_TOKEN: ${{ github.token }}
