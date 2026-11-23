@@ -85,6 +85,16 @@ export function configureBundledProviderOverrides(installManifest, bundledDepend
   return { installManifest: result, profiles: selected };
 }
 
+// Replace every `zod` value in an npm overrides tree with one version.
+export function pinZodOverrides(overrides, version) {
+  const result = {};
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    result[key] = key === "zod" ? version
+      : value && typeof value === "object" ? pinZodOverrides(value, version) : value;
+  }
+  return result;
+}
+
 const inside = (root, candidate) => {
   const value = relative(root, candidate);
   return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
@@ -403,9 +413,13 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
   );
   // The managed payload pins one zod for the whole tree (see
   // scripts/pack-managed-payload.sh). Bundled closures install separately, so
-  // the pin must reach them here too.
+  // the pin must reach them here too, including nested provider overrides:
+  // a nested `zod` pin (Claude ACP) hoists into this package's node_modules
+  // and shadows the payload zod for the server's own imports.
   const pinnedZodVersion = process.env.PAPERCLIP_BUNDLED_ZOD_VERSION;
-  if (pinnedZodVersion) installManifest.overrides = { ...installManifest.overrides, zod: pinnedZodVersion };
+  if (pinnedZodVersion) {
+    installManifest.overrides = pinZodOverrides({ ...installManifest.overrides, zod: pinnedZodVersion }, pinnedZodVersion);
+  }
   writeFileSync(deployedPackagePath, `${JSON.stringify(installManifest, null, 2)}\n`);
 
   execFileSync(

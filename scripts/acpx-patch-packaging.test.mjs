@@ -25,6 +25,7 @@ import {
   createBundledInstallManifest,
   configureBundledProviderOverrides,
   materializePublishManifest,
+  pinZodOverrides,
   selectBundledDependencyPatches,
   stageBundledEsbuildOptionalDependencies,
   stageBundledProviderOptionalDependencies,
@@ -764,4 +765,19 @@ test("installed ACPX runtime persists and restores optional goal capabilities", 
   assert.deepEqual(JSON.parse(JSON.stringify(helpers.restoredGoalCapability(saved))), goal);
   assert.equal(helpers.persistedGoalCapability({ ...goal, version: 2 }), undefined);
   assert.equal(helpers.persistedGoalCapability({ ...goal, actions: ["set"] }), undefined);
+});
+
+test("payload zod pin replaces nested provider zod overrides", () => {
+  const serverPackage = JSON.parse(readFileSync(new URL("../server/package.json", import.meta.url), "utf8"));
+  const bundled = serverPackage.bundleDependencies ?? serverPackage.bundledDependencies;
+  const { installManifest } = configureBundledProviderOverrides(
+    createBundledInstallManifest(serverPackage, bundled), bundled, rootPackage, profileData,
+  );
+  const nested = JSON.stringify(installManifest.overrides);
+  assert.match(nested, /"zod":"4\.4\.3"/);
+  const pinned = pinZodOverrides({ ...installManifest.overrides, zod: "4.6.7" }, "4.6.7");
+  const zodValues = [...JSON.stringify(pinned).matchAll(/"zod":"([^"]+)"/g)].map(match => match[1]);
+  assert.ok(zodValues.length >= 2);
+  assert.deepEqual([...new Set(zodValues)], ["4.6.7"]);
+  assert.equal(Object.values(pinned).find(value => value?.["@agentclientprotocol/sdk"])?.["@agentclientprotocol/sdk"], "1.4.0");
 });
