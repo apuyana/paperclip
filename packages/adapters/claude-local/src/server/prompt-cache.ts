@@ -172,3 +172,83 @@ export async function prepareClaudePromptBundle(input: {
     instructionsFilePath,
   };
 }
+
+const RUNTIME_NAME_HASH_SUFFIX = /--[0-9a-f]{8,}$/;
+
+/**
+ * Chooses the user-scope directory name for each bundled skill. The name is
+ * the runtime name without its `--<hash>` suffix, so `Skill <slug>` resolves.
+ * When two skills would get the same clean name, or a clean name matches
+ * another skill's runtime name, those skills keep their runtime names.
+ */
+export function resolveClaudeUserScopeSkillNames(skills: SkillEntry[]): Map<string, string> {
+  const cleanName = (entry: SkillEntry) => entry.runtimeName.replace(RUNTIME_NAME_HASH_SUFFIX, "") || entry.runtimeName;
+  const counts = new Map<string, number>();
+  for (const entry of skills) counts.set(cleanName(entry), (counts.get(cleanName(entry)) ?? 0) + 1);
+  const runtimeNames = new Set(skills.map((entry) => entry.runtimeName));
+  const names = new Map<string, string>();
+  for (const entry of skills) {
+    const clean = cleanName(entry);
+    const ambiguous = (counts.get(clean) ?? 0) > 1 || (clean !== entry.runtimeName && runtimeNames.has(clean));
+    names.set(entry.runtimeName, ambiguous ? entry.runtimeName : clean);
+  }
+  return names;
+}
+
+/**
+ * Claude Code loads `--add-dir` skills as project scope. Managed AI connection
+ * runs pass `--setting-sources user`, which drops project scope, so the
+ * bundled company skills never reach the Skill tool. Link each bundled skill
+ * into `<CLAUDE_CONFIG_DIR>/skills` (user scope) instead of loading project
+ * settings from the workspace. Links point at the bundle entries, and stale
+ * links into the prompt cache from an earlier bundle are removed.
+ */
+export async function linkClaudePromptBundleSkillsIntoUserScope(input: {
+  bundle: ClaudePromptBundle;
+  claudeConfigDir: string;
+  skills: SkillEntry[];
+  onLog: AdapterExecutionContext["onLog"];
+}): Promise<string[]> {
+  const { bundle, claudeConfigDir, skills, onLog } = input;
+  const bundleSkillsHome = path.join(bundle.rootDir, ".claude", "skills");
+  const userSkillsHome = path.join(claudeConfigDir, "skills");
+  const promptCacheRoot = path.dirname(bundle.rootDir);
+  await fs.mkdir(userSkillsHome, { recursive: true });
+
+  const desired = new Map<string, string>();
+  for (const [runtimeName, name] of resolveClaudeUserScopeSkillNames(skills)) {
+    desired.set(name, path.join(bundleSkillsHome, runtimeName));
+  }
+
+  for (const entry of await fs.readdir(userSkillsHome, { withFileTypes: true })) {
+    if (!entry.isSymbolicLink()) continue;
+    const linkPath = path.join(userSkillsHome, entry.name);
+    const linked = await fs.readlink(linkPath).catch(() => null);
+    if (!linked) continue;
+    const resolved = path.resolve(userSkillsHome, linked);
+    const ownedByPromptCache = resolved.startsWith(`${promptCacheRoot}${path.sep}`);
+    if (ownedByPromptCache && desired.get(entry.name) !== resolved) await fs.unlink(linkPath);
+  }
+
+  const linked: string[] = [];
+  for (const [name, source] of desired) {
+    const target = path.join(userSkillsHome, name);
+    try {
+      const outcome = await ensurePaperclipSkillSymlink(source, target);
+      if (outcome === "skipped" && (await fs.readlink(target).catch(() => null)) !== source) {
+        await onLog(
+          "stderr",
+          `[paperclip] Claude user skill "${name}" already exists in ${userSkillsHome}; leaving it in place.\n`,
+        );
+        continue;
+      }
+      linked.push(name);
+    } catch (err) {
+      await onLog(
+        "stderr",
+        `[paperclip] Failed to link Claude skill "${name}" into ${userSkillsHome}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+  return linked.sort();
+}

@@ -499,6 +499,74 @@ describe("claude execute", () => {
     }
   });
 
+  it("links bundled skills into the managed user config dir when --setting-sources user drops project scope", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-claude-managed-skills-"));
+    const { workspace, commandPath, capturePath, restore } = await setupExecuteEnv(root);
+    const managedConfigDir = path.join(root, "managed-home", "provider");
+    const skillSources = {
+      alpha: path.join(root, "skills", "alpha"),
+      clashOne: path.join(root, "skills", "clash-one"),
+      clashTwo: path.join(root, "skills", "clash-two"),
+      builtin: path.join(root, "skills", "builtin"),
+    };
+    for (const dir of Object.values(skillSources)) {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "SKILL.md"), `---\nname: ${path.basename(dir)}\n---\n`);
+    }
+    await fs.mkdir(path.join(managedConfigDir, "skills", "user-owned"), { recursive: true });
+    vi.stubEnv("PAPERCLIP_HOME", path.join(root, "paperclip-home"));
+    vi.stubEnv("PAPERCLIP_INSTANCE_ID", "default");
+    const runtimeSkills = [
+      { key: "github/1/a/alpha", runtimeName: "alpha--7d88e3813d", source: skillSources.alpha },
+      { key: "github/1/b/clash", runtimeName: "clash--1a57187a75", source: skillSources.clashOne },
+      { key: "github/1/c/clash", runtimeName: "clash--82b8fab258", source: skillSources.clashTwo },
+      { key: "paperclipai/paperclip/builtin", runtimeName: "builtin", source: skillSources.builtin },
+    ];
+    const run = async (runId: string, skills: typeof runtimeSkills, managed: boolean) => {
+      const result = await execute({
+        runId,
+        agent: { id: "agent-1", companyId: "co-1", name: "Agent", adapterType: "claude_local", adapterConfig: { engine: "cli" } },
+        runtime: { sessionId: null, sessionParams: null, sessionDisplayId: null, taskKey: null },
+        config: {
+          engine: "cli",
+          command: commandPath,
+          cwd: workspace,
+          env: { PAPERCLIP_TEST_CAPTURE_PATH: capturePath, CLAUDE_CONFIG_DIR: managedConfigDir },
+          promptTemplate: "Do work.",
+          paperclipRuntimeSkills: skills,
+          paperclipSkillSync: { desiredSkills: skills.map((skill) => skill.key) },
+          ...(managed ? { managedAiConnection: { mode: "subscription" } } : {}),
+        },
+        context: {},
+        authToken: "tok",
+        onLog: async () => {},
+      });
+      expect(result.exitCode).toBe(0);
+      return JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+    };
+    const userSkills = async () => (await fs.readdir(path.join(managedConfigDir, "skills"))).sort();
+    try {
+      const first = await run("run-managed-1", runtimeSkills, true);
+      expect(first.argv).toEqual(expect.arrayContaining(["--setting-sources", "user"]));
+      expect(await userSkills()).toEqual(["alpha", "builtin", "clash--1a57187a75", "clash--82b8fab258", "user-owned"]);
+      const alphaLink = path.join(managedConfigDir, "skills", "alpha");
+      expect(await fs.readlink(alphaLink)).toBe(path.join(first.addDir!, ".claude", "skills", "alpha--7d88e3813d"));
+      expect(await fs.readFile(path.join(alphaLink, "SKILL.md"), "utf8")).toContain("name: alpha");
+
+      await run("run-managed-2", [runtimeSkills[0]!], true);
+      expect(await userSkills()).toEqual(["alpha", "user-owned"]);
+
+      await fs.rm(path.join(managedConfigDir, "skills"), { recursive: true });
+      const unmanaged = await run("run-unmanaged", runtimeSkills, false);
+      expect(unmanaged.argv).not.toContain("--setting-sources");
+      await expect(fs.readdir(path.join(managedConfigDir, "skills"))).rejects.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+      restore();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   /**
    * Regression tests for https://github.com/paperclipai/paperclip/issues/2848
    *

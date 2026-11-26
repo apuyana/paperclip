@@ -98,7 +98,7 @@ import {
 import { prepareCompatibleClaudeCommand } from "./sandbox-cli-version.js";
 import { resolveClaudeDesiredSkillNames, resolveClaudeSkillsHome } from "./skills.js";
 import { isBedrockModelId } from "./models.js";
-import { prepareClaudePromptBundle } from "./prompt-cache.js";
+import { linkClaudePromptBundleSkillsIntoUserScope, prepareClaudePromptBundle } from "./prompt-cache.js";
 import { buildClaudeExecutionPermissionArgs, claudeSandboxPermissionEnv } from "./permissions.js";
 import { resolveClaudeModel, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import {
@@ -588,6 +588,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
   const localMcpConfigDir = path.dirname(localMcpConfigPath);
   const sharedClaudeConfigDir = config.managedAiConnection ? asString(configEnv.CLAUDE_CONFIG_DIR, "") : resolveSharedClaudeConfigDir(process.env);
+  if (config.managedAiConnection && sharedClaudeConfigDir) {
+    // `--setting-sources user` (below) drops the project-scope `--add-dir`
+    // skills; expose them from the managed user config dir instead.
+    const linkedSkills = await linkClaudePromptBundleSkillsIntoUserScope({
+      bundle: promptBundle,
+      claudeConfigDir: sharedClaudeConfigDir,
+      skills: mountableSkillEntries,
+      onLog,
+    });
+    if (linkedSkills.length > 0) {
+      await onLog(
+        "stdout",
+        `[paperclip] Linked ${linkedSkills.length} skill(s) into the managed Claude user scope: ${linkedSkills.join(", ")}.\n`,
+      );
+    }
+  }
   const networkScope = parseLocalProcessNetworkScope(config.networkScope);
   const filesystemScope = parseLocalProcessFilesystemScope(config.filesystemScope);
   const localProcessSandbox: LocalProcessSandboxOptions | null =
